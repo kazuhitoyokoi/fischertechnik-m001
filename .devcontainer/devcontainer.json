@@ -9,7 +9,8 @@
         "python.testing.unittestEnabled": false,
         "python.testing.pytestArgs": [
           "test_main.py"
-        ]
+        ],
+        "editor.formatOnSave": true
       },
       "extensions": [
         "ms-python.python",
@@ -17,7 +18,8 @@
       ]
     }
   },
-  "postCreateCommand": "pip install --upgrade pip && pip install streamlit gpiozero opcua pytest",
+  "postCreateCommand": "python -m pip install --upgrade pip && pip install -r requirements.txt",
+  "postStartCommand": "nohup streamlit run app.py --server.address=0.0.0.0 --server.port=8501 > /tmp/streamlit.log 2>&1 &",
   "portsAttributes": {
     "8501": {
       "label": "Streamlit App",
