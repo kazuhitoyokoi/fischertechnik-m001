@@ -1,0 +1,32 @@
+{
+  "name": "M001 Simulator Dev Environment",
+  "image": "mcr.microsoft.com/devcontainers/python:3.11",
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "python.testing.pytestEnabled": true,
+        "python.testing.unittestEnabled": false,
+        "python.testing.pytestArgs": [
+          "test_main.py"
+        ]
+      },
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance"
+      ]
+    }
+  },
+  "postCreateCommand": "pip install --upgrade pip && pip install streamlit gpiozero opcua pytest",
+  "portsAttributes": {
+    "8501": {
+      "label": "Streamlit App",
+      "onAutoForward": "openPreview"
+    },
+    "4840": {
+      "label": "OPC UA Server",
+      "onAutoForward": "ignore"
+    }
+  },
+  "remoteUser": "vscode"
+}
