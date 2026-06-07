@@ -14,7 +14,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# 【変更】使用する名前空間のインデックスを 1 に設定
+# 接続/名前空間定義
+SERVER_ENDPOINT = "opc.tcp://0.0.0.0:4840/m001"
+NAMESPACE_URI = "urn:local:l1"
+NAMESPACE_ARRAY = ["http://opcfoundation.org/UA/", NAMESPACE_URI, "urn:local:l2"]
+
+# 使用する名前空間のインデックスを 1 に設定
 NS_INDEX = 1
 
 # OPC UA サーバー用のグローバルノード変数
@@ -29,17 +34,47 @@ ua_led02 = None
 prev_values = {}
 
 
+def _node_id(path):
+    return f"ns={NS_INDEX};s={path}"
+
+
+NODE_IDS = {
+    "photo": _node_id("Sensors.PhotoSensor"),
+    "sw": _node_id("Sensors.PushSwitch"),
+    "magnet": _node_id("Sensors.MagnetSensor"),
+    "led01": _node_id("Actuators.ProjectorLED"),
+    "motor": _node_id("Actuators.ConveyorMotor"),
+    "led02": _node_id("Actuators.StatusLED"),
+}
+
+
+def _get_child_node(server, ns, folder, name):
+    return server.get_objects_node().get_child([f"{ns}:{folder}", f"{ns}:{name}"])
+
+
+def bind_server_nodes(server, ns=NS_INDEX):
+    """既存のアドレス空間からグローバルノード参照を再バインドする。"""
+    global ua_photo, ua_sw, ua_magnet, ua_led01, ua_motor, ua_led02
+
+    ua_photo = _get_child_node(server, ns, "Sensors", "PhotoSensor")
+    ua_sw = _get_child_node(server, ns, "Sensors", "PushSwitch")
+    ua_magnet = _get_child_node(server, ns, "Sensors", "MagnetSensor")
+    ua_led01 = _get_child_node(server, ns, "Actuators", "ProjectorLED")
+    ua_motor = _get_child_node(server, ns, "Actuators", "ConveyorMotor")
+    ua_led02 = _get_child_node(server, ns, "Actuators", "StatusLED")
+
+
 def init_opcua_server():
     """OPC UA サーバーの初期化、エンドポイント設定、アドレス空間の構築"""
     global ua_photo, ua_sw, ua_magnet, ua_led01, ua_motor, ua_led02
     server = Server()
     
     # エンドポイントのパスを /m001 に設定
-    server.set_endpoint("opc.tcp://0.0.0.0:4840/m001")
+    server.set_endpoint(SERVER_ENDPOINT)
     
     # 名前空間の固定
     ns_node = server.get_node(ua.NodeId(ua.ObjectIds.Server_NamespaceArray))
-    ns_node.set_value(["http://opcfoundation.org/UA/", "urn:local:l1", "urn:local:l2"])
+    ns_node.set_value(NAMESPACE_ARRAY)
     
     logger.info("OPC UA サーバ名前空間の登録（インデックス %d を使用します）", NS_INDEX)
 
@@ -71,6 +106,9 @@ def set_node_value_with_log(node, node_id_str, value):
     ノードの値が変化した時のみ、ノードIDと詳細情報をログに出力して値を更新する
     """
     global prev_values
+    if node is None:
+        return
+
     old_value = prev_values.get(node_id_str)
     
     if old_value != value:
@@ -80,6 +118,13 @@ def set_node_value_with_log(node, node_id_str, value):
         print(f"[OPC UAデータ変化イベント] NodeID: {node_id_str} | 値が {old_value} から {value} に変化しました。")
 
 
+def _sync_from_line_markers(line, node, node_id_str, true_markers, false_markers):
+    if any(marker in line for marker in true_markers):
+        set_node_value_with_log(node, node_id_str, True)
+    elif any(marker in line for marker in false_markers):
+        set_node_value_with_log(node, node_id_str, False)
+
+
 def parse_and_sync(line):
     """
     typeM001_gpiozero.py の標準出力を解析し、対応する OPC UA ノードの値を更新する。
@@ -87,47 +132,22 @@ def parse_and_sync(line):
     global ua_photo, ua_sw, ua_magnet, ua_led01, ua_motor, ua_led02
 
     try:
-        # 1. フォトセンサの状態変化を検知
-        if "フォトセンサ" in line:
-            if "HIGH" in line or "ワーク検知" in line:
-                set_node_value_with_log(ua_photo, f"ns={NS_INDEX};s=Sensors.PhotoSensor", True)
-            elif "LOW" in line or "ワークなし" in line:
-                set_node_value_with_log(ua_photo, f"ns={NS_INDEX};s=Sensors.PhotoSensor", False)
+        if not isinstance(line, str):
+            return
 
-        # 2. 非常停止スイッチの状態変化を検知
-        elif "非常停止スイッチ" in line or "非常停止が作動中" in line:
-            if "HIGH" in line or "作動中" in line:
-                set_node_value_with_log(ua_sw, f"ns={NS_INDEX};s=Sensors.PushSwitch", True)
-            elif "LOW" in line or "解除" in line:
-                set_node_value_with_log(ua_sw, f"ns={NS_INDEX};s=Sensors.PushSwitch", False)
+        rules = [
+            (("フォトセンサ",), ua_photo, NODE_IDS["photo"], ("HIGH", "ワーク検知"), ("LOW", "ワークなし")),
+            (("非常停止スイッチ", "非常停止が作動中"), ua_sw, NODE_IDS["sw"], ("HIGH", "作動中"), ("LOW", "解除")),
+            (("磁気センサ", "磁気を検知"), ua_magnet, NODE_IDS["magnet"], ("LOW", "検知"), ("HIGH", "磁気なし")),
+            (("モーター",), ua_motor, NODE_IDS["motor"], ("起動", "ON"), ("停止", "OFF")),
+            (("LED02",), ua_led02, NODE_IDS["led02"], ("HIGH", "点灯"), ("LOW", "消灯")),
+            (("LED01",), ua_led01, NODE_IDS["led01"], ("ON", "点灯"), ("OFF", "消灯")),
+        ]
 
-        # 3. 磁気センサの状態変化を検知
-        elif "磁気センサ" in line or "磁気を検知" in line:
-            if "LOW" in line or "検知" in line:
-                set_node_value_with_log(ua_magnet, f"ns={NS_INDEX};s=Sensors.MagnetSensor", True)
-            elif "HIGH" in line or "磁気なし" in line:
-                set_node_value_with_log(ua_magnet, f"ns={NS_INDEX};s=Sensors.MagnetSensor", False)
-
-        # 4. モーター（コンベア）の状態変化を検知
-        elif "モーター" in line:
-            if "起動" in line or "ON" in line:
-                set_node_value_with_log(ua_motor, f"ns={NS_INDEX};s=Actuators.ConveyorMotor", True)
-            elif "停止" in line or "OFF" in line:
-                set_node_value_with_log(ua_motor, f"ns={NS_INDEX};s=Actuators.ConveyorMotor", False)
-
-        # 5. LED02（ステータスLED）の状態変化を検知
-        elif "LED02" in line:
-            if "HIGH" in line or "点灯" in line:
-                set_node_value_with_log(ua_led02, f"ns={NS_INDEX};s=Actuators.StatusLED", True)
-            elif "LOW" in line or "消灯" in line:
-                set_node_value_with_log(ua_led02, f"ns={NS_INDEX};s=Actuators.StatusLED", False)
-
-        # 6. LED01（投光器）の初期状態を検知
-        elif "LED01" in line:
-            if "ON" in line or "点灯" in line:
-                set_node_value_with_log(ua_led01, f"ns={NS_INDEX};s=Actuators.ProjectorLED", True)
-            elif "OFF" in line or "消灯" in line:
-                set_node_value_with_log(ua_led01, f"ns={NS_INDEX};s=Actuators.ProjectorLED", False)
+        for triggers, node, node_id_str, true_markers, false_markers in rules:
+            if any(trigger in line for trigger in triggers):
+                _sync_from_line_markers(line, node, node_id_str, true_markers, false_markers)
+                break
 
     except Exception as e:
         logger.error("ライン解析またはOPC UA同期中にエラーが発生しました: %s", e)
@@ -152,7 +172,7 @@ def main():
     server = init_opcua_server()
     logger.info("OPC UA サーバを起動します。")
     server.start()
-    logger.info("OPC UA サーバが正常に起動しました (Endpoint: opc.tcp://0.0.0.0:4840/m001)")
+    logger.info("OPC UA サーバが正常に起動しました (Endpoint: %s)", SERVER_ENDPOINT)
 
     # 2. 既存の typeM001_gpiozero.py を子プロセスとして起動
     target_script = os.path.join(os.path.dirname(__file__), "typeM001_gpiozero.py")

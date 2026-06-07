@@ -18,8 +18,9 @@ warnings.filterwarnings("ignore", category=DeprecationWarning, module="opcua")
 # ==============================================================================
 # 設定定義 (typeM001_opcua.py の仕様に完全準拠)
 # ==============================================================================
-SERVER_URL = "opc.tcp://127.0.0.1:4840/m001"
-NS_URI = "urn:local:l1"
+SERVER_URL = typeM001_opcua.SERVER_ENDPOINT.replace("0.0.0.0", "127.0.0.1")
+NS_URI = typeM001_opcua.NAMESPACE_URI
+REFRESH_INTERVAL_SEC = 0.5
 
 # 監視ノードの定義 (Folder, Name, ラベル名)
 NODE_CONFIGS = [
@@ -46,7 +47,7 @@ SCENARIOS = [
         "duration": 5
     },
     {
-        "title": "⚙️ シナリオ3: 製造ライン of コンベア起動",
+        "title": "⚙️ シナリオ3: 製造ラインのコンベア起動",
         "logs": ["モーター: 起動しました", "LED02: 点灯"],
         "duration": 5
     },
@@ -71,11 +72,6 @@ SCENARIOS = [
 class ScenarioState:
     def __init__(self):
         self.current_idx = 0
-
-if 'state_box' not in st.session_state:
-    st.session_state['state_box'] = ScenarioState()
-
-state_box = st.session_state['state_box']
 
 # ==============================================================================
 # バックグラウンドでのログ注入とシナリオ制御
@@ -114,10 +110,17 @@ def run_scenario_loop(state_obj):
             # 指定された秒数だけ現在の状態をキープ
             time.sleep(sc["duration"])
 
-# def get_node_by_path ...
 def get_node_by_path(client, ns, folder, name):
     """Browse Path を使用してクライアントから安全にノードを取得する"""
     return client.get_objects_node().get_child([f"{ns}:{folder}", f"{ns}:{name}"])
+
+
+def get_node_snapshot(client, ns, folder, name):
+    try:
+        node = get_node_by_path(client, ns, folder, name)
+        return node.get_value(), node.nodeid.to_string()
+    except Exception:
+        return "取得エラー", "Unknown"
 
 # ==============================================================================
 # バックグラウンドサーバーおよびシナリオスレッドの初期化（初回のみ）
@@ -133,12 +136,7 @@ def init_backend(_state_obj):
     time.sleep(0.5)
 
     ns = server.get_namespace_index(NS_URI)
-    typeM001_opcua.ua_photo = server.get_objects_node().get_child([f"{ns}:Sensors", f"{ns}:PhotoSensor"])
-    typeM001_opcua.ua_sw = server.get_objects_node().get_child([f"{ns}:Sensors", f"{ns}:PushSwitch"])
-    typeM001_opcua.ua_magnet = server.get_objects_node().get_child([f"{ns}:Sensors", f"{ns}:MagnetSensor"])
-    typeM001_opcua.ua_led01 = server.get_objects_node().get_child([f"{ns}:Actuators", f"{ns}:ProjectorLED"])
-    typeM001_opcua.ua_motor = server.get_objects_node().get_child([f"{ns}:Actuators", f"{ns}:ConveyorMotor"])
-    typeM001_opcua.ua_led02 = server.get_objects_node().get_child([f"{ns}:Actuators", f"{ns}:StatusLED"])
+    typeM001_opcua.bind_server_nodes(server, ns)
     
     # シナリオ実行用のバックグラウンドスレッドを開始（データオブジェクトを渡す）
     t = threading.Thread(target=run_scenario_loop, args=(_state_obj,), daemon=True)
@@ -147,89 +145,93 @@ def init_backend(_state_obj):
     return server
 
 # サーバーと自動シナリオの稼働
-server_instance = init_backend(state_box)
+def render_app():
+    st.set_page_config(page_title="fischertechnik 自動シミュレータ", layout="wide")
 
-# ==============================================================================
-# Streamlit UI 画面の構築
-# ==============================================================================
-st.set_page_config(page_title="fischertechnik 自動シミュレータ", layout="wide")
+    if 'state_box' not in st.session_state:
+        st.session_state['state_box'] = ScenarioState()
+    state_box = st.session_state['state_box']
 
-st.title("🏭 fischertechnik-m001 自動シナリオ・シミュレータ")
-st.caption("実機なしで、定義された実稼働テストシナリオを自動で連続実行し、OPC UAノードの変化をリアルタイム追跡します。")
+    # サーバーと自動シナリオの稼働
+    server_instance = init_backend(state_box)
 
-# 画面分割 (左: 全体シナリオ工程一覧、右: OPC UAノードのリアルタイムステータス)
-col_left, col_right = st.columns([4, 5])
+    # ==============================================================================
+    # Streamlit UI 画面の構築
+    # ==============================================================================
+    st.title("🏭 fischertechnik-m001 自動シナリオ・シミュレータ")
+    st.caption("実機なしで、定義された実稼働テストシナリオを自動で連続実行し、OPC UAノードの変化をリアルタイム追跡します。")
 
-with col_left:
-    st.subheader("📂 全体シナリオ工程一覧 (自動ループ中)")
-    
-    # スレッド側で更新された最新の進行インデックスを取得
-    current_idx = state_box.current_idx
-    
-    # 各工程のリスト表示
-    for i, sc in enumerate(SCENARIOS):
-        if i == current_idx:
-            # 現在アクティブな工程をハイライト
-            st.markdown(f"👉 **{sc['title']}** *(実行中)*")
-        else:
-            st.markdown(f"⚪ {sc['title']}")
-            
-    st.markdown("---")
-    # プロセスを確実に落とす安全停止ボタン
-    if st.button("🛑 シミュレータを安全に停止", type="secondary", use_container_width=True):
-        st.warning("⚠️ OPC UAサーバーをシャットダウンし、プロセスを終了しています。このタブを閉じてください。")
+    # 画面分割 (左: 全体シナリオ工程一覧、右: OPC UAノードのリアルタイムステータス)
+    col_left, col_right = st.columns([4, 5])
+
+    with col_left:
+        st.subheader("📂 全体シナリオ工程一覧 (自動ループ中)")
+
+        # スレッド側で更新された最新の進行インデックスを取得
+        current_idx = state_box.current_idx
+
+        # 各工程のリスト表示
+        for i, sc in enumerate(SCENARIOS):
+            if i == current_idx:
+                # 現在アクティブな工程をハイライト
+                st.markdown(f"👉 **{sc['title']}** *(実行中)*")
+            else:
+                st.markdown(f"⚪ {sc['title']}")
+
+        st.markdown("---")
+        # プロセスを確実に落とす安全停止ボタン
+        if st.button("🛑 シミュレータを安全に停止", type="secondary", use_container_width=True):
+            st.warning("⚠️ OPC UAサーバーをシャットダウンし、プロセスを終了しています。このタブを閉じてください。")
+            try:
+                server_instance.stop()
+            except Exception:
+                pass
+            os._exit(0)
+
+    with col_right:
+        st.subheader("📊 OPC UA リアルタイム・アドレス空間")
+        st.write(f"🔌 `{SERVER_URL}` | Namespace URI: `{NS_URI}`")
+        st.write(f"⏱️ 最終同期時刻: {time.strftime('%H:%M:%S')}")
+
+        # クライアントから現在のリアルタイムなノード値を取得してマッピング
         try:
-            server_instance.stop()
-        except:
-            pass
-        os._exit(0)
+            with Client(SERVER_URL) as client:
+                ns = client.get_namespace_index(NS_URI)
 
-with col_right:
-    st.subheader("📊 OPC UA リアルタイム・アドレス空間")
-    st.write(f"🔌 `{SERVER_URL}` | Namespace URI: `{NS_URI}`")
-    st.write(f"⏱️ 最終同期時刻: {time.strftime('%H:%M:%S')}")
-    
-    # クライアントから現在のリアルタイムなノード値を取得してマッピング
-    try:
-        with Client(SERVER_URL) as client:
-            ns = client.get_namespace_index(NS_URI)
-            
-            st.markdown("### 🔹 センサー群 (Sensors)")
-            sens_cols = st.columns(3)
-            
-            st.markdown("### 🔸 アクチュエータ群 (Actuators)")
-            act_cols = st.columns(3)
-            
-            for idx_cfg, (folder, name, label) in enumerate(NODE_CONFIGS):
-                try:
-                    node = get_node_by_path(client, ns, folder, name)
-                    current_value = node.get_value()
-                    node_id_str = node.nodeid.to_string()
-                except Exception:
-                    current_value = "取得エラー"
-                    node_id_str = "Unknown"
-                
-                # 状態インジケータ文字列の作成
-                if current_value is True:
-                    state_text = "🟢 TRUE (ON / HIGH)"
-                elif current_value is False:
-                    state_text = "🔴 FALSE (OFF / LOW)"
-                else:
-                    state_text = f"❓ {current_value}"
-                
-                # 適切なカラムを選択して出力
-                target_cols = sens_cols if folder == "Sensors" else act_cols
-                col_target = target_cols[idx_cfg % 3]
-                
-                with col_target:
-                    st.metric(label=label, value="TRUE" if current_value is True else "FALSE")
-                    st.write(state_text)
-                    st.caption(f"`{node_id_str}`")
-                    st.markdown("---")
-                    
-    except Exception as e:
-        st.error(f"❌ OPC UA サーバーへの接続失敗: {e}")
+                st.markdown("### 🔹 センサー群 (Sensors)")
+                sens_cols = st.columns(3)
 
-# 500ms（0.5秒）待機して画面を自動再描画（リフレッシュループ）
-time.sleep(0.5)
-st.rerun()
+                st.markdown("### 🔸 アクチュエータ群 (Actuators)")
+                act_cols = st.columns(3)
+
+                for idx_cfg, (folder, name, label) in enumerate(NODE_CONFIGS):
+                    current_value, node_id_str = get_node_snapshot(client, ns, folder, name)
+
+                    # 状態インジケータ文字列の作成
+                    if current_value is True:
+                        state_text = "🟢 TRUE (ON / HIGH)"
+                    elif current_value is False:
+                        state_text = "🔴 FALSE (OFF / LOW)"
+                    else:
+                        state_text = f"❓ {current_value}"
+
+                    # 適切なカラムを選択して出力
+                    target_cols = sens_cols if folder == "Sensors" else act_cols
+                    col_target = target_cols[idx_cfg % 3]
+
+                    with col_target:
+                        st.metric(label=label, value="TRUE" if current_value is True else "FALSE")
+                        st.write(state_text)
+                        st.caption(f"`{node_id_str}`")
+                        st.markdown("---")
+
+        except Exception as e:
+            st.error(f"❌ OPC UA サーバーへの接続失敗: {e}")
+
+    # 500ms（0.5秒）待機して画面を自動再描画（リフレッシュループ）
+    time.sleep(REFRESH_INTERVAL_SEC)
+    st.rerun()
+
+
+if os.environ.get("M001_SKIP_STREAMLIT_AUTORUN") != "1":
+    render_app()

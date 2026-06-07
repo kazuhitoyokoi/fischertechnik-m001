@@ -1,5 +1,4 @@
 import sys
-import os
 import time
 import threading
 from pathlib import Path
@@ -33,6 +32,20 @@ def get_server_node_by_path(server, ns, folder, name):
 def get_client_node_by_path(client, ns, folder, name):
     """クライアント側ノードを browse path で取得する。"""
     return client.get_objects_node().get_child([f"{ns}:{folder}", f"{ns}:{name}"])
+
+
+def read_values_from_server(expected_nodes):
+    """クライアント接続してノード値をまとめて取得する。"""
+    values = {}
+    client = Client(SERVER_URL)
+    try:
+        client.connect()
+        ns = client.get_namespace_index(NS_URI)
+        for folder, name in expected_nodes:
+            values[(folder, name)] = get_client_node_by_path(client, ns, folder, name).get_value()
+    finally:
+        client.disconnect()
+    return values
 
 
 class ScenarioMockSubprocess:
@@ -120,19 +133,20 @@ def test_signal_transition_to_true(opcua_server):
     ]
     run_mock_log_flow(logs)
 
-    client = Client(SERVER_URL)
-    try:
-        client.connect()
-        ns = client.get_namespace_index(NS_URI)
-        
-        assert get_client_node_by_path(client, ns, "Sensors", "PhotoSensor").get_value() is True
-        assert get_client_node_by_path(client, ns, "Sensors", "PushSwitch").get_value() is True
-        assert get_client_node_by_path(client, ns, "Sensors", "MagnetSensor").get_value() is True
-        assert get_client_node_by_path(client, ns, "Actuators", "ConveyorMotor").get_value() is True
-        assert get_client_node_by_path(client, ns, "Actuators", "ProjectorLED").get_value() is True
-        assert get_client_node_by_path(client, ns, "Actuators", "StatusLED").get_value() is True
-    finally:
-        client.disconnect()
+    values = read_values_from_server([
+        ("Sensors", "PhotoSensor"),
+        ("Sensors", "PushSwitch"),
+        ("Sensors", "MagnetSensor"),
+        ("Actuators", "ConveyorMotor"),
+        ("Actuators", "ProjectorLED"),
+        ("Actuators", "StatusLED"),
+    ])
+    assert values[("Sensors", "PhotoSensor")] is True
+    assert values[("Sensors", "PushSwitch")] is True
+    assert values[("Sensors", "MagnetSensor")] is True
+    assert values[("Actuators", "ConveyorMotor")] is True
+    assert values[("Actuators", "ProjectorLED")] is True
+    assert values[("Actuators", "StatusLED")] is True
 
 
 # ==============================================================================
@@ -147,15 +161,12 @@ def test_signal_transition_to_false(opcua_server):
     ]
     run_mock_log_flow(logs)
 
-    client = Client(SERVER_URL)
-    try:
-        client.connect()
-        ns = client.get_namespace_index(NS_URI)
-        
-        assert get_client_node_by_path(client, ns, "Sensors", "PhotoSensor").get_value() is False
-        assert get_client_node_by_path(client, ns, "Actuators", "ConveyorMotor").get_value() is False
-    finally:
-        client.disconnect()
+    values = read_values_from_server([
+        ("Sensors", "PhotoSensor"),
+        ("Actuators", "ConveyorMotor"),
+    ])
+    assert values[("Sensors", "PhotoSensor")] is False
+    assert values[("Actuators", "ConveyorMotor")] is False
 
 
 # ==============================================================================
@@ -172,19 +183,20 @@ def test_alternative_keywords_parsing(opcua_server):
     ]
     run_mock_log_flow(logs)
 
-    client = Client(SERVER_URL)
-    try:
-        client.connect()
-        ns = client.get_namespace_index(NS_URI)
-        
-        assert get_client_node_by_path(client, ns, "Sensors", "PhotoSensor").get_value() is True
-        assert get_client_node_by_path(client, ns, "Sensors", "PushSwitch").get_value() is True
-        assert get_client_node_by_path(client, ns, "Sensors", "MagnetSensor").get_value() is True
-        assert get_client_node_by_path(client, ns, "Actuators", "ConveyorMotor").get_value() is True
-        assert get_client_node_by_path(client, ns, "Actuators", "ProjectorLED").get_value() is True
-        assert get_client_node_by_path(client, ns, "Actuators", "StatusLED").get_value() is True
-    finally:
-        client.disconnect()
+    values = read_values_from_server([
+        ("Sensors", "PhotoSensor"),
+        ("Sensors", "PushSwitch"),
+        ("Sensors", "MagnetSensor"),
+        ("Actuators", "ConveyorMotor"),
+        ("Actuators", "ProjectorLED"),
+        ("Actuators", "StatusLED"),
+    ])
+    assert values[("Sensors", "PhotoSensor")] is True
+    assert values[("Sensors", "PushSwitch")] is True
+    assert values[("Sensors", "MagnetSensor")] is True
+    assert values[("Actuators", "ConveyorMotor")] is True
+    assert values[("Actuators", "ProjectorLED")] is True
+    assert values[("Actuators", "StatusLED")] is True
 
 
 # ==============================================================================
@@ -199,14 +211,8 @@ def test_noise_logs_are_ignored(opcua_server):
     ]
     run_mock_log_flow(logs)
 
-    client = Client(SERVER_URL)
-    try:
-        client.connect()
-        ns = client.get_namespace_index(NS_URI)
-        
-        assert get_client_node_by_path(client, ns, "Sensors", "PhotoSensor").get_value() is True
-    finally:
-        client.disconnect()
+    values = read_values_from_server([("Sensors", "PhotoSensor")])
+    assert values[("Sensors", "PhotoSensor")] is True
 
 
 # ==============================================================================
@@ -222,14 +228,8 @@ def test_rapid_toggle_state_retention(opcua_server):
     ]
     run_mock_log_flow(logs)
 
-    client = Client(SERVER_URL)
-    try:
-        client.connect()
-        ns = client.get_namespace_index(NS_URI)
-        
-        assert get_client_node_by_path(client, ns, "Actuators", "ConveyorMotor").get_value() is True
-    finally:
-        client.disconnect()
+    values = read_values_from_server([("Actuators", "ConveyorMotor")])
+    assert values[("Actuators", "ConveyorMotor")] is True
 
 
 # ==============================================================================
@@ -245,15 +245,12 @@ def test_string_boundary_and_spaces(opcua_server):
     ]
     run_mock_log_flow(logs)
 
-    client = Client(SERVER_URL)
-    try:
-        client.connect()
-        ns = client.get_namespace_index(NS_URI)
-        
-        assert get_client_node_by_path(client, ns, "Sensors", "PhotoSensor").get_value() is True
-        assert get_client_node_by_path(client, ns, "Actuators", "ConveyorMotor").get_value() is False
-    finally:
-        client.disconnect()
+    values = read_values_from_server([
+        ("Sensors", "PhotoSensor"),
+        ("Actuators", "ConveyorMotor"),
+    ])
+    assert values[("Sensors", "PhotoSensor")] is True
+    assert values[("Actuators", "ConveyorMotor")] is False
 
 
 # ==============================================================================
