@@ -195,6 +195,8 @@ streamlit run app_opcua.py
 ```bash
 .venv/bin/pytest tests/test_typeM001_gpiozero.py -v
 .venv/bin/pytest tests/test_typeM001_opcua.py -v
+.venv/bin/pytest tests/test_app_streamlit.py -v
+.venv/bin/pytest tests/test_app_opcua_streamlit.py -v
 ```
 
 ## 実行モードに関する注意点
