@@ -1,8 +1,14 @@
 import sys
 import os
+from pathlib import Path
 import pytest
 from gpiozero import Device
 from gpiozero.pins.mock import MockFactory, MockPin
+
+# pytestのimportモード差異に依存せず、常にプロジェクトルートを解決する
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 # ==== 1. PWMエラー回避パッチ ====
 def mock_set_frequency(self, value):
