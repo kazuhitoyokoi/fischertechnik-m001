@@ -30,4 +30,4 @@ jobs:
 
     - name: Run tests with pytest
       run: |
-        pytest test_typeM001_gpiozero.py -v
+        pytest test_typeM001_*.py -v
